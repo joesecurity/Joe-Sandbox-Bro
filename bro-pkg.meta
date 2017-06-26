@@ -1,0 +1,7 @@
+[package]
+description = JoeSandbox-Bro extracts files from your internet connection
+    and analyzes them automatically on Joe Sandbox. Combined with Joe Sandbox's
+    reporting and alerting features you can build a powerful IDS.
+tags = file analysis, sandbox, malware, virus
+script_dir = scripts
+

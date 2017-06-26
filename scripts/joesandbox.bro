@@ -5,83 +5,86 @@
 
 module JoeSandbox;
 
-type FilterMode: enum { Inclusion, Exclusion };
-
 export {
     #######################
     #     Settings        #
     #######################
 
-    # path to the jbxapi.py script
-    const jbxapi_script: string = "./jbxapi.py" &redef;
+    # Joe Sandbox api key
+    const apikey: string = "YOUR_API_KEY" &redef;
 
-    # path to the extract_files directory of bro
-    const extract_files_dir: string = "extract_files" &redef;
+    # Joe Sandbox api url
+    # const apiurl: string = "http://example.net/joesandbox/index.php/api/";
+    const apiurl: string = "https://jbxcloud.joesecurity.org/api/" &redef;
+
+    # Please accept the Joe Sandbox Cloud Terms and Conditions if you are
+    # using Joe Sandbox Cloud.
+    # https://jbxcloud.joesecurity.org/download/termsandconditions.pdf
+    const accept_tac: bool = F &redef;
 
     # timeout for uploading samples
     const submission_timeout: interval = 30sec &redef;
-    
-    # By default, this script uses a short inclusion list with
-    # only executables selected.
-    # You can choose to upload all files filtered by an
-    # exclusion list.
-    const mode: FilterMode = Inclusion;
-    #const mode: FilterMode = Exclusion;
 
-    const inclusion_list: set[string] {
-        "application/x-dosexec",
-        "text/x-msdos-batch",
-        # "application/x-mach-o-executable",
-    } &redef;
-    
-    # List of mime types to exclude in the ExclusionList mode.
-    # https://github.com/bro/bro/tree/master/scripts/base/frameworks/files/magic
-    const exclusion_list_patterns: vector of pattern = {
-        /image\/.*/,
-        /video\/.*/,
-        /audio\/.*/,
-        /application\/(x-)?font-.*/,
-        /text\/.*/,     # python, ruby, etc. scripts are also included here
-    } &redef;
+    # function to decide whether to analyze a sample or not
+    const should_analyze = function(meta: fa_metadata): bool
+        {
+            const mime_types: set[string] = {
+                "application/x-dosexec",
+                "text/x-msdos-batch",
+                # "application/x-mach-o-executable",
+            };
 
-    const exclusion_list_strings: set[string] = {
-        # macOS specific
-        "application/x-mach-o-executable",
-        "application/x-dmg",
-        "application/x-xar",
+            # There are too many undetected mime types out there for us to all
+            # analyze them. Most of them are boring anyway.
+            if (!meta?$mime_type) return F;
 
-        # others
-        "application/ocsp-response",
-        "application/ocsp-request",
-        "application/pkix-cert",
-    } &redef;
+            return meta$mime_type in mime_types;
+        } &redef;
 
+    # Duration until we re-analyse an already analyzed sample.
+    const cache_duration: interval = 365 days &redef;
+}
+
+export {
     type webid: count;
 
     type Info: record {
-        ts: time                &log;           # time the file was seen
-        filename: string        &log;
+        ## Time the sample was seen.
+        ts: time                &log;
+        ## File id
+        id: string              &log;
+        ## File path of the extracted sample.
+        path: string;
+        ## Boolean whether the sample was submitted to Joe Sandbox or not.
         submitted: bool         &log &default=F;
-        orig_filename: string   &log &optional;
+        ## Original filename of the sample if available.
+        filename: string        &log &optional;
+        ## Source of the sample. (HTTP, SMB, etc.)
         source: string          &log &optional;
+        ## Details about the source such as the URI
         source_details: string  &log &optional;
+        ## The Joe Sandbox webids for the sample.
         webids: set[webid]      &log &optional;
     };
 
     redef enum Log::ID += { LOG };
+
+    # forward declarations
+    global submit: function(path: string): set[webid];
 }
+
+# path to the jbxapi.py script
+const jbxapi_script: string = @DIR + "/jbxapi.py";
 
 # forward declarations
 global remove_file: function(path: string);
 global extract_webids: function(text: vector of string): set[webid];
-global submit: function(path: string): set[webid];
 
 # cache for analyzed examples
 global submitted_samples: table[string] of set[webid]
     &synchronized
     &persistent
-    &read_expire = 30 days
-    &write_expire = 365 days;
+    &read_expire = cache_duration;
 
 redef record fa_file += {
     # By convention, the name of this new field is the lowercase name
@@ -90,36 +93,18 @@ redef record fa_file += {
 };
     
 # attach file extractor to files of interest
-event file_sniff(f: fa_file, meta: fa_metadata)
+event file_sniff(f: fa_file, meta: fa_metadata) &priority=10
     {
-        # There are too many undetected mime types out there for us to all
-        # analyze them. Most of them are boring anyway.
-        if (!meta?$mime_type) return;
+        if (!should_analyze(meta)) return;
 
-        # determine if we are interested in this file
-        if (mode == Inclusion) {
-            if (meta$mime_type !in inclusion_list) {
-                return;
-            }
-        } else {
-            if (meta$mime_type in exclusion_list_strings) {
-                return;
-            }
-            for (i in exclusion_list_patterns) {
-                if (exclusion_list_patterns[i] == meta$mime_type) return;
-            }
-        }
-
-        local filename = cat("j-bro-", f$id);
-        # jbxapi.py only accepts lower case file paths
-        filename = to_lower(filename);
+        local extract_filename = cat(Exec::tmp_dir, "/j-", f$id);
 
         # create attribute so we know in file_state_remove that we are interested
         # in this file
-        f$joesandbox = [$filename = filename, $ts = f$info$ts];
+        f$joesandbox = [$id = f$id, $path = extract_filename, $ts = f$info$ts];
 
         # attach file extractor
-        Files::add_analyzer(f, Files::ANALYZER_EXTRACT, [$extract_filename = filename]);
+        Files::add_analyzer(f, Files::ANALYZER_EXTRACT, [$extract_filename = extract_filename]);
         Files::add_analyzer(f, Files::ANALYZER_SHA256);
     }
 
@@ -129,20 +114,18 @@ event file_state_remove(f: fa_file)
     {
         if (!f?$joesandbox) return;
 
-        local path = fmt("%s/%s", extract_files_dir, f$joesandbox$filename);
-
         # abort if the file was not completely captured
         if (f$missing_bytes != 0 && f$overflow_bytes != 0) {
-            remove_file(path);
+            remove_file(f$joesandbox$path);
         }
 
         # add additional data to log
         if (f$info?$filename) {
-            f$joesandbox$orig_filename = f$info$filename;
+            f$joesandbox$filename = f$info$filename;
         } else if (f?$http && f$http?$uri) {
             local match = match_pattern(f$http$uri, /[^\/]+$/);
             if (match$matched) {
-                f$joesandbox$orig_filename = match$str;
+                f$joesandbox$filename = match$str;
             }
         }
         if (f$info?$source) {
@@ -161,14 +144,14 @@ event file_state_remove(f: fa_file)
             if (f$info$sha256 in submitted_samples) {
                 f$joesandbox$webids = submitted_samples[f$info$sha256];
                 Log::write(JoeSandbox::LOG, f$joesandbox);
-                remove_file(path);
+                remove_file(f$joesandbox$path);
                 return;
             }
         }
 
         # submit sample
-        when (local webids = submit(path)) {
-            remove_file(path);
+        when (local webids = submit(f$joesandbox$path)) {
+            remove_file(f$joesandbox$path);
 
             if (|webids| > 0) {
                 f$joesandbox$submitted = T;
@@ -181,10 +164,10 @@ event file_state_remove(f: fa_file)
                     submitted_samples[f$info$sha256] = webids;
                 }
             } else {
-                print "Error uploading, no webid found.";
+                Reporter::error("Error uploading, no webid found.");
             }
         } timeout submission_timeout {
-            remove_file(path);
+            remove_file(f$joesandbox$path);
         }
     }
 
@@ -197,7 +180,7 @@ event bro_init()
 # Remove the specified file.
 #
 function remove_file(path: string) {
-    local cmd = fmt("rm %s", str_shell_escape(path));
+    local cmd = fmt("rm \"%s\"", str_shell_escape(path));
 
     when (local result = Exec::run([$cmd=cmd])) {
         # do nothing
@@ -246,31 +229,36 @@ function extract_webids(text: vector of string): set[webid]
 function submit(path: string): set[webid]
     {
         # run command
-        local cmd = fmt("/usr/bin/env python %s analyze %s", jbxapi_script, str_shell_escape(path));
+        local cmd = fmt("/usr/bin/env python2 \"%s\" analyze \"%s\" --apiurl \"%s\" --apikey \"%s\" --comment \"%s\" \"%s\"",
+            str_shell_escape(jbxapi_script),
+            accept_tac ? "--accept-tac" : "",
+            str_shell_escape(apiurl),
+            str_shell_escape(apikey),
+            str_shell_escape("submitted by bro"),
+            str_shell_escape(path)
+        );
         local result = Exec::run([$cmd=cmd]);
 
         # parse result
         local webids: set[webid];
-
-        if (result?$stdout) {
+        if (result?$exit_code && result$exit_code == 0 && result?$stdout) {
             webids = extract_webids(result$stdout);
         }
 
-        # upon error print output of jbxapi
+        # upon error report the output of jbxapi
         if (|webids| == 0) {
-            # print the output of jbxapi.py
+            # report the output of jbxapi.py
             if (result?$stdout) {
                 for (i in result$stdout) {
-                    print result$stdout[i];
+                    Reporter::error(result$stdout[i]);
                 }
             }
 
             if (result?$stderr) {
                 for (i in result$stderr) {
-                    print result$stderr[i];
+                    Reporter::error(result$stderr[i]);
                 }
             }
-           
         }
 
         return webids;
