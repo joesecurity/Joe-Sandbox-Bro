@@ -12,7 +12,7 @@ By using this script you can fetch and detect malware payloads in HTTP, FTP and 
 * Bro 2.5
 * The [Bro package manager](http://bro-package-manager.readthedocs.io): `pip install bro-pkg`
 
-# Installation (for people familier with Bro)
+# Installation (for people familiar with Bro)
 
 1. Installation
 
@@ -35,7 +35,7 @@ By using this script you can fetch and detect malware payloads in HTTP, FTP and 
 
 # Step-by-step for inexperienced users (not recommended for production environments)
 
-1. Install linux. (We used Ubuntu 16.04.)
+1. Install Linux. (We used Ubuntu 16.04.)
 2. Install Bro 2.5:
 
     [https://www.bro.org/download/packages.html](https://www.bro.org/download/packages.html)
@@ -81,7 +81,7 @@ Bro now extracts all PE files it sees and uploads them to Joe Sandbox.
 
 # Alerts for malicious files
 
-If the script is working properly, you should now setup an alert to get notificed if Joe Sandbox detect a file as malicious.
+If the script is working properly, you should now setup an alert to get notified if Joe Sandbox detect a file as malicious.
 For this, open the alerts page in the web interface of Joe Sandbox and add a new alert. Set the `XPath` field to
 
     /analysis/signaturedetections/strategy[@name='empiric']/detection[text()='MAL']
