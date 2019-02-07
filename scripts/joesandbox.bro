@@ -191,13 +191,12 @@ function remove_file(path: string) {
 
 #
 # Extract webids from the output of jbxapi.py
-# Returns an empty vecotr on error.
+# Returns an empty vector on error.
 #
 function extract_webids(text: vector of string): set[webid]
     {
         # Sample output
         # {
-        #     "webid": 297802,
         #     "webids": [
         #         297802
         #     ]
@@ -206,7 +205,7 @@ function extract_webids(text: vector of string): set[webid]
         local webids: set[webid];
 
         # ensure we parse a valid response
-        if (!(|text| >= 2 && "webid" in text[2])) {
+        if (!(|text| >= 2 && "webids" in text[2])) {
             return webids;
         }
 
@@ -229,7 +228,7 @@ function extract_webids(text: vector of string): set[webid]
 function submit(path: string): set[webid]
     {
         # run command
-        local cmd = fmt("/usr/bin/env python2 \"%s\" analyze \"%s\" --apiurl \"%s\" --apikey \"%s\" --comment \"%s\" \"%s\"",
+        local cmd = fmt("/usr/bin/env python2 \"%s\" submit \"%s\" --apiurl \"%s\" --apikey \"%s\" --comments \"%s\" \"%s\"",
             str_shell_escape(jbxapi_script),
             accept_tac ? "--accept-tac" : "",
             str_shell_escape(apiurl),
