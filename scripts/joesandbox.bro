@@ -46,42 +46,47 @@ export {
 }
 
 export {
-    type webid: count;
+    type submission_id: string;
+
+    type Submission: record {
+        # Indicate whether the submission was sucessful or not.
+        success: bool;
+
+        # The submission id if success=T
+        id: submission_id             &optional;
+    };
 
     type Info: record {
         ## Time the sample was seen.
-        ts: time                &log;
+        ts: time                      &log;
         ## File id
-        id: string              &log;
+        id: string                    &log;
         ## File path of the extracted sample.
         path: string;
         ## Boolean whether the sample was submitted to Joe Sandbox or not.
-        submitted: bool         &log &default=F;
+        submitted: bool               &log &default=F;
         ## Original filename of the sample if available.
-        filename: string        &log &optional;
+        filename: string              &log &optional;
         ## Source of the sample. (HTTP, SMB, etc.)
-        source: string          &log &optional;
+        source: string                &log &optional;
         ## Details about the source such as the URI
-        source_details: string  &log &optional;
-        ## The Joe Sandbox webids for the sample.
-        webids: set[webid]      &log &optional;
+        source_details: string        &log &optional;
+        ## The Joe Sandbox submission_id for the sample.
+        submission_id: submission_id  &log &optional;
     };
 
     redef enum Log::ID += { LOG };
 
     # forward declarations
-    global submit: function(path: string): set[webid];
+    global submit: function(path: string): Submission;
 }
-
-# path to the jbxapi.py script
-const jbxapi_script: string = @DIR + "/jbxapi.py";
 
 # forward declarations
 global remove_file: function(path: string);
-global extract_webids: function(text: vector of string): set[webid];
+global extract_submission: function(text: vector of string): Submission;
 
 # cache for analyzed examples
-global submitted_samples: table[string] of set[webid]
+global submitted_samples: table[string] of submission_id
     &synchronized
     &persistent
     &read_expire = cache_duration;
@@ -142,7 +147,7 @@ event file_state_remove(f: fa_file)
         # log and early return if we have already analysed this file
         if (f$info?$sha256) {
             if (f$info$sha256 in submitted_samples) {
-                f$joesandbox$webids = submitted_samples[f$info$sha256];
+                f$joesandbox$submission_id = submitted_samples[f$info$sha256];
                 Log::write(JoeSandbox::LOG, f$joesandbox);
                 remove_file(f$joesandbox$path);
                 return;
@@ -150,22 +155,20 @@ event file_state_remove(f: fa_file)
         }
 
         # submit sample
-        when (local webids = submit(f$joesandbox$path)) {
+        when (local submission = submit(f$joesandbox$path)) {
             remove_file(f$joesandbox$path);
 
-            if (|webids| > 0) {
+            if (submission$success) {
                 f$joesandbox$submitted = T;
-                f$joesandbox$webids = webids;
-
-                Log::write(JoeSandbox::LOG, f$joesandbox);
+                f$joesandbox$submission_id = submission$id;
 
                 # remember sample
                 if (f$info?$sha256) {
-                    submitted_samples[f$info$sha256] = webids;
+                    submitted_samples[f$info$sha256] = submission$id;
                 }
-            } else {
-                Reporter::error("Error uploading, no webid found.");
             }
+
+            Log::write(JoeSandbox::LOG, f$joesandbox);
         } timeout submission_timeout {
             remove_file(f$joesandbox$path);
         }
@@ -190,46 +193,40 @@ function remove_file(path: string) {
 }
 
 #
-# Extract webids from the output of jbxapi.py
-# Returns an empty vector on error.
+# Extract the submission from the output of jbxapi.py
 #
-function extract_webids(text: vector of string): set[webid]
+function extract_submission(text: vector of string): Submission
     {
         # Sample output
         # {
-        #     "webids": [
-        #         297802
-        #     ]
+        #     "submission_id": "12345"
         # }
 
-        local webids: set[webid];
+        for (i in text) {
+            if (/"submission_id"/ !in text[i]) {
+                next;
+            }
 
-        # ensure we parse a valid response
-        if (!(|text| >= 2 && "webids" in text[2])) {
-            return webids;
+            local secondPart = find_last(text[i], /:.*/);
+            local withQuotes = find_last(secondPart, /\".*\"/);
+            local id = sub_bytes(withQuotes, 2, |withQuotes| - 2);
+
+            return Submission($success = T, $id = id);
         }
 
-        local all_text = join_string_vec(text, "\n");
-
-        # get all numbers in stdout
-        local webid_strings = find_all(all_text, /[0-9]+/);
-        for (webid_string in webid_strings) {
-            add webids[to_count(webid_string)];
-        }
-
-        return webids;
+        # no submission_id found
+        return Submission($success = F);
     }
 
 #
 # Submit a file to Joe Sandbox. (Needs to run asynchronously inside when().)
 #
-# Returns the set of webids. (Empty on error.)
+# Return the submission_id or ""
 #
-function submit(path: string): set[webid]
+function submit(path: string): Submission
     {
         # run command
-        local cmd = fmt("/usr/bin/env python2 \"%s\" submit \"%s\" --apiurl \"%s\" --apikey \"%s\" --comments \"%s\" \"%s\"",
-            str_shell_escape(jbxapi_script),
+        local cmd = fmt("/usr/bin/env python -m jbxapi submit \"%s\" --apiurl \"%s\" --apikey \"%s\" --comments \"%s\" \"%s\"",
             accept_tac ? "--accept-tac" : "",
             str_shell_escape(apiurl),
             str_shell_escape(apikey),
@@ -239,13 +236,13 @@ function submit(path: string): set[webid]
         local result = Exec::run([$cmd=cmd]);
 
         # parse result
-        local webids: set[webid];
+        local submission = Submission($success = F);
         if (result?$exit_code && result$exit_code == 0 && result?$stdout) {
-            webids = extract_webids(result$stdout);
+            submission = extract_submission(result$stdout);
         }
 
         # upon error report the output of jbxapi
-        if (|webids| == 0) {
+        if (!submission$success) {
             # report the output of jbxapi.py
             if (result?$stdout) {
                 for (i in result$stdout) {
@@ -260,5 +257,5 @@ function submit(path: string): set[webid]
             }
         }
 
-        return webids;
+        return submission;
     }

@@ -7,8 +7,8 @@ By using this script you can fetch and detect malware payloads in HTTP, FTP and 
 
 # Requirements
 
-* Python 2.6
-* The `requests` library: `pip install requests`
+* Python 2.7 or 3.5+
+* The `jbxapi` library: `pip install jbxapi`
 * Bro 2.5
 * The [Bro package manager](http://bro-package-manager.readthedocs.io): `pip install bro-pkg`
 
@@ -16,7 +16,7 @@ By using this script you can fetch and detect malware payloads in HTTP, FTP and 
 
 1. Installation
 
-        pip install requests
+        pip install jbxapi
         bro-pkg refresh
         bro-pkg install joesecurity/Joe-Sandbox-Bro
 
@@ -31,7 +31,7 @@ By using this script you can fetch and detect malware payloads in HTTP, FTP and 
         redef JoeSandbox::accept_tac = T;
 
         # for on-premise installations
-        # redef JoeSandbox::apiurl = "http://example.net/joesandbox/index.php/api/";
+        # redef JoeSandbox::apiurl = "https://example.net/joesandbox/index.php/api/";
 
 # Step-by-step for inexperienced users (not recommended for production environments)
 
@@ -46,7 +46,8 @@ By using this script you can fetch and detect malware payloads in HTTP, FTP and 
 
 4. Install some software:
 
-        pip install bro-pkg requests
+        pip install bro-pkg
+        pip install jbxapi
 
 5. Add Bro to your path:
 
@@ -109,4 +110,4 @@ The code is licensed under MIT.
 
 # Author
 
-Joe Security (@[joe4security](https://twitter.com/#!/joe4security) - [webpage](https://www.joesecurity.org))
+Joe Security ([@joe4security](https://twitter.com/joe4security) - [webpage](https://www.joesecurity.org))
